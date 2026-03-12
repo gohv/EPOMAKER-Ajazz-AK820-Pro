@@ -1,4 +1,6 @@
 # ak820-ctl
+Full name on Amazon.fr
+### EPOMAKER Ajazz AK820 Pro 75% Gasket Mechanical Keyboard, Wireless/BT/USB, RGB Backlit, TFT Screen, Soundproofing Foam for PC/Mac/Win,QWERTY (White Purple, Ajazz Gift Switch) 
 
 <img width="682" height="590" alt="image" src="https://github.com/user-attachments/assets/383badf8-4a99-4e98-81f2-b89cdc9fa692" />
 
