@@ -1,5 +1,8 @@
 # ak820-ctl
 
+<img width="682" height="590" alt="image" src="https://github.com/user-attachments/assets/383badf8-4a99-4e98-81f2-b89cdc9fa692" />
+
+
 Linux control software for the Ajazz AK820 Pro keyboard. Includes a CLI tool and a GUI app.
 
 The official software only supports Windows. This project talks to the keyboard over USB HID to control lighting, sleep timer, and the built-in clock.
