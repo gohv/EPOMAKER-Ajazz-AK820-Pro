@@ -1,0 +1,30 @@
+[package]
+name = "ak820_ctl"
+version = "0.1.0"
+edition = "2021"
+description = "Linux control software for Ajazz AK820 Pro keyboard"
+
+[[bin]]
+name = "ak820-ctl"
+path = "src/main.rs"
+
+[[bin]]
+name = "ak820-gui"
+path = "src/gui/main.rs"
+required-features = ["gui"]
+
+[features]
+default = []
+gui = ["eframe"]
+
+[dependencies]
+hidapi = { version = "2.6", default-features = false, features = ["linux-static-libusb"] }
+rusb = "0.9"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+libc = "0.2"
+sysinfo = "0.33"
+chrono = "0.4"
+embedded-graphics = "0.8"
+embedded-graphics-core = "0.4"
+eframe = { version = "0.31", optional = true }

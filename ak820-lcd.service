@@ -1,0 +1,12 @@
+[Unit]
+Description=AK820 Pro LCD temperature display
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/home/gohv/ak820-ctl/target/release/ak820_ctl lcd --interval 5 --max-interval 60
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
