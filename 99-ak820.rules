@@ -1,5 +1,6 @@
 # udev rules for EPOMAKER Ajazz AK820 Pro (Microdia)
-# Vendor ID: 0x0c45, Product ID: 0x8009
+# Vendor ID: 0x0c45, Product IDs: 0x8009, 0x800a
+# Keep in sync with SUPPORTED_MODELS in src/protocol.rs (one line pair per PID).
 #
 # Install:
 #   sudo cp 99-ak820.rules /etc/udev/rules.d/
@@ -8,8 +9,10 @@
 #
 # Then re-plug the keyboard (or reboot).
 
-# Grant read/write access to hidraw devices
+# AK820 Pro (0x8009)
 KERNEL=="hidraw*", ATTRS{idVendor}=="0c45", ATTRS{idProduct}=="8009", MODE="0666"
-
-# Grant access to the USB device (for libusb / rusb)
 SUBSYSTEM=="usb", ATTR{idVendor}=="0c45", ATTR{idProduct}=="8009", MODE="0666"
+
+# AK820 Pro v1.1 (0x800a)
+KERNEL=="hidraw*", ATTRS{idVendor}=="0c45", ATTRS{idProduct}=="800a", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0c45", ATTR{idProduct}=="800a", MODE="0666"

@@ -12,6 +12,7 @@ const CONTROL_INTERFACE: i32 = 3;
 
 pub struct AK820Device {
     device: hidapi::HidDevice,
+    model: &'static Model,
 }
 
 impl AK820Device {
@@ -26,15 +27,15 @@ impl AK820Device {
 
         let devices: Vec<_> = api
             .device_list()
-            .filter(|d| d.vendor_id() == VENDOR_ID && d.product_id() == PRODUCT_ID)
+            .filter(|d| find_model(d.vendor_id(), d.product_id()).is_some())
             .collect();
 
         if devices.is_empty() {
             bail!(
-                "AK820 Pro not found (VID {:04x}, PID {:04x}). \
+                "AK820 Pro not found (VID {:04x}, PID {}). \
                  Is it connected via USB cable?",
                 VENDOR_ID,
-                PRODUCT_ID
+                supported_pids()
             );
         }
 
@@ -55,8 +56,14 @@ impl AK820Device {
             .context(format!("Failed to open interface {}", iface))?;
 
         device.set_blocking_mode(true)?;
-        eprintln!("Connected to AK820 Pro (interface {})", iface);
-        Ok(Self { device })
+        let model = find_model(info.vendor_id(), info.product_id())
+            .expect("device list was filtered by find_model");
+        eprintln!("Connected to {} [{:04x}] (interface {})", model.name, model.pid, iface);
+        Ok(Self { device, model })
+    }
+
+    pub fn model(&self) -> &'static Model {
+        self.model
     }
 
     /// Send a feature report followed by a GET_REPORT handshake.
@@ -120,13 +127,18 @@ impl AK820Device {
             .context("Failed to set lighting mode")
     }
 
-    /// Set the sleep timer.
-    pub fn set_sleep_time(&self, sleep_time: SleepTime) -> Result<()> {
-        let preamble = sleep_preamble_packet();
-        let data = sleep_data_packet(sleep_time);
+    /// Write the settings block (sleep timer + key response time).
+    /// `key_response` is required on models that support it, None otherwise.
+    pub fn set_settings(&self, sleep_time: SleepTime, key_response: Option<KeyResponse>) -> Result<()> {
+        if self.model.supports_key_response() != key_response.is_some() {
+            bail!("Key response time is {} on {}",
+                if key_response.is_some() { "not supported" } else { "required" }, self.model.name);
+        }
+        let data = settings_data_packet(self.model.settings, sleep_time, key_response);
         self.send_feature(&start_packet())?;
-        self.send_feature(&preamble)?;
+        self.send_feature(&settings_preamble_packet())?;
         self.send_feature(&data)?;
+        self.send_feature(&save_packet())?;
         Ok(())
     }
 }

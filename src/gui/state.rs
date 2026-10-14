@@ -1,4 +1,5 @@
-use ak820_ctl::protocol::{Direction, LightingMode, SleepTime};
+use ak820_ctl::protocol::{Direction, KeyResponse, LightingMode, SleepTime};
+use ak820_ctl::settings_store::StoredSettings;
 
 pub struct LightingState {
     pub mode_index: usize,
@@ -38,26 +39,40 @@ impl LightingState {
     }
 }
 
-pub struct SleepState {
-    pub selected: usize,
+/// Sleep timer + key response time, written to the keyboard together.
+pub struct SettingsState {
+    pub sleep_selected: usize,
+    pub key_response: u8,
 }
 
-impl Default for SleepState {
+impl Default for SettingsState {
+    /// Start from the last applied values, since the keyboard can't report them.
     fn default() -> Self {
-        Self { selected: 0 }
+        let stored = StoredSettings::load();
+        Self {
+            sleep_selected: stored
+                .sleep
+                .and_then(|s| Self::SLEEP_OPTIONS.iter().position(|(_, o)| *o == s))
+                .unwrap_or(0),
+            key_response: stored.key_response.map_or(1, |k| k.level()),
+        }
     }
 }
 
-impl SleepState {
-    pub const OPTIONS: &[(& str, SleepTime)] = &[
+impl SettingsState {
+    pub const SLEEP_OPTIONS: &[(& str, SleepTime)] = &[
         ("Never", SleepTime::Never),
         ("1 minute", SleepTime::OneMinute),
         ("5 minutes", SleepTime::FiveMinutes),
         ("30 minutes", SleepTime::ThirtyMinutes),
     ];
 
-    pub fn current(&self) -> SleepTime {
-        Self::OPTIONS[self.selected].1
+    pub fn sleep(&self) -> SleepTime {
+        Self::SLEEP_OPTIONS[self.sleep_selected].1
+    }
+
+    pub fn key_response(&self) -> KeyResponse {
+        KeyResponse::new(self.key_response).expect("slider is limited to valid levels")
     }
 }
 

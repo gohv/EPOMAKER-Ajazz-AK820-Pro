@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 use ak820_ctl::lcd;
 use ak820_ctl::protocol::*;
+use ak820_ctl::settings_store::StoredSettings;
 use ak820_ctl::stats::SystemStats;
 use ak820_ctl::usb::UsbDevice;
 
@@ -50,6 +51,28 @@ enum Commands {
         time: String,
     },
 
+    /// Set the key response time (hardware debounce), level 1-5.
+    /// Wired delay: 1 = 2-3 ms, 2 = 5-6 ms, 3 = 8-9 ms, 4 = 13-14 ms, 5 = 17-18 ms.
+    /// Raise it if keys chatter (double-register).
+    #[command(alias = "debounce")]
+    KeyResponse {
+        /// Level 1 (fastest) to 5 (most debounce)
+        level: u8,
+    },
+
+    /// Set sleep timer and key response time together, or show the last
+    /// applied values when called without options. The keyboard can't report
+    /// its settings, so the last applied values are remembered locally.
+    Settings {
+        /// Sleep time: never, 1m, 5m, 30m
+        #[arg(long)]
+        sleep: Option<String>,
+
+        /// Key response time (debounce) level 1-5
+        #[arg(long, alias = "debounce")]
+        key_response: Option<u8>,
+    },
+
     /// Show current system stats (CPU, RAM, time) — preview for LCD display
     Stats {
         /// Refresh interval in seconds
@@ -95,6 +118,55 @@ fn parse_hex_color(s: &str) -> Result<(u8, u8, u8)> {
     let g = u8::from_str_radix(&s[2..4], 16)?;
     let b = u8::from_str_radix(&s[4..6], 16)?;
     Ok((r, g, b))
+}
+
+fn parse_sleep(s: &str) -> Result<SleepTime> {
+    SleepTime::from_name(s)
+        .ok_or_else(|| anyhow::anyhow!("Unknown sleep time '{}'. Use: never, 1m, 5m, 30m", s))
+}
+
+fn parse_key_response(level: u8) -> Result<KeyResponse> {
+    KeyResponse::new(level).ok_or_else(|| anyhow::anyhow!(
+        "Key response level must be {}-{}, got {}", KeyResponse::MIN, KeyResponse::MAX, level
+    ))
+}
+
+/// Sleep timer and key response time are written together in one block and
+/// the keyboard can't report either, so fill in whichever wasn't given from
+/// the last applied values.
+fn apply_settings(sleep: Option<SleepTime>, key_response: Option<KeyResponse>) -> Result<()> {
+    let dev = UsbDevice::open()?;
+    let model = dev.model();
+    let stored = StoredSettings::load();
+    let both_hint = "Set both once with: ak820-ctl settings --sleep <never|1m|5m|30m> --key-response <1-5>";
+
+    let Some(sleep) = sleep.or(stored.sleep) else {
+        bail!("The keyboard can't report its current sleep timer, and it must be sent \
+               together with the key response time.\n{}", both_hint);
+    };
+    let key_response = if model.supports_key_response() {
+        let Some(k) = key_response.or(stored.key_response) else {
+            bail!("The keyboard can't report its current key response time, and it must be \
+                   sent together with the sleep timer.\n{}", both_hint);
+        };
+        Some(k)
+    } else if key_response.is_some() {
+        bail!("Key response time isn't supported on {} [{:04x}]", model.name, model.pid);
+    } else {
+        None
+    };
+
+    dev.set_settings(sleep, key_response)?;
+    println!("Sleep timer: {}", sleep.name());
+    if let Some(k) = key_response {
+        println!("Key response time: level {} (~{} wired)", k.level(), k.wired_delay());
+    }
+
+    let updated = StoredSettings { sleep: Some(sleep), key_response: key_response.or(stored.key_response) };
+    if let Err(e) = updated.save() {
+        eprintln!("Warning: couldn't remember settings: {:#}", e);
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -161,12 +233,28 @@ fn main() -> Result<()> {
         }
 
         Commands::Sleep { time } => {
-            let sleep_time = SleepTime::from_name(&time)
-                .ok_or_else(|| anyhow::anyhow!("Unknown sleep time '{}'. Use: never, 1m, 5m, 30m", time))?;
+            apply_settings(Some(parse_sleep(&time)?), None)?;
+        }
 
-            let dev = UsbDevice::open()?;
-            dev.set_sleep_time(sleep_time)?;
-            println!("Sleep timer set to: {:?}", sleep_time);
+        Commands::KeyResponse { level } => {
+            apply_settings(None, Some(parse_key_response(level)?))?;
+        }
+
+        Commands::Settings { sleep, key_response } => {
+            if sleep.is_none() && key_response.is_none() {
+                let stored = StoredSettings::load();
+                let unknown = "unknown (not set with ak820-ctl yet)";
+                println!("Last applied settings:");
+                println!("  Sleep timer:       {}", stored.sleep.map_or(unknown, |s| s.name()));
+                match stored.key_response {
+                    Some(k) => println!("  Key response time: level {} (~{} wired)", k.level(), k.wired_delay()),
+                    None => println!("  Key response time: {}", unknown),
+                }
+            } else {
+                let sleep = sleep.as_deref().map(parse_sleep).transpose()?;
+                let key_response = key_response.map(parse_key_response).transpose()?;
+                apply_settings(sleep, key_response)?;
+            }
         }
 
         Commands::Stats { interval } => {
@@ -297,9 +385,12 @@ fn main() -> Result<()> {
         }
 
         Commands::Probe => {
-            println!("Probing for AK820 Pro (VID {:04X}, PID {:04X})...", VENDOR_ID, PRODUCT_ID);
+            println!("Probing for AK820 Pro (VID {:04x}, PID {})...", VENDOR_ID, supported_pids());
             let dev = UsbDevice::open()?;
-            println!("Successfully connected to AK820 Pro!");
+            let model = dev.model();
+            println!("Successfully connected to {} [{:04x}]!", model.name, model.pid);
+            println!("Key response time (debounce): {}",
+                if model.supports_key_response() { "supported" } else { "not supported" });
             println!("Device is ready for commands.");
             drop(dev);
         }

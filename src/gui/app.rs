@@ -1,5 +1,5 @@
 use eframe::egui;
-use ak820_ctl::protocol::{LightingMode, MAX_BRIGHTNESS, MAX_SPEED};
+use ak820_ctl::protocol::{KeyResponse, LightingMode, MAX_BRIGHTNESS, MAX_SPEED};
 
 use crate::actions;
 use crate::state::*;
@@ -7,7 +7,7 @@ use crate::widgets;
 
 pub struct Ak820App {
     lighting: LightingState,
-    sleep: SleepState,
+    settings: SettingsState,
     clock: ClockState,
     status: ConnectionStatus,
     status_message: Option<(String, bool)>, // (message, is_error)
@@ -21,7 +21,7 @@ impl Ak820App {
         };
         Self {
             lighting: LightingState::default(),
-            sleep: SleepState::default(),
+            settings: SettingsState::default(),
             clock: ClockState { last_sync: None },
             status,
             status_message: None,
@@ -151,20 +151,34 @@ impl eframe::App for Ak820App {
                     self.set_status(result);
                 }
 
-                // ==== SLEEP TIMER ====
-                widgets::section_header(ui, "😴 Sleep Timer");
+                // ==== KEYBOARD SETTINGS ====
+                // Sleep timer and key response time are written together.
+                widgets::section_header(ui, "⚙ Keyboard Settings");
 
                 egui::ComboBox::from_label("Sleep after")
-                    .selected_text(SleepState::OPTIONS[self.sleep.selected].0)
+                    .selected_text(SettingsState::SLEEP_OPTIONS[self.settings.sleep_selected].0)
                     .show_ui(ui, |ui| {
-                        for (i, (label, _)) in SleepState::OPTIONS.iter().enumerate() {
-                            ui.selectable_value(&mut self.sleep.selected, i, *label);
+                        for (i, (label, _)) in SettingsState::SLEEP_OPTIONS.iter().enumerate() {
+                            ui.selectable_value(&mut self.settings.sleep_selected, i, *label);
                         }
                     });
 
+                ui.add(
+                    egui::Slider::new(&mut self.settings.key_response, KeyResponse::MIN..=KeyResponse::MAX)
+                        .text("Key response time (debounce)")
+                        .integer(),
+                );
+                ui.label(format!(
+                    "~{} wired. Raise it if keys chatter (double-register).",
+                    self.settings.key_response().wired_delay()
+                ));
+
                 ui.add_space(4.0);
-                if ui.button("Apply Sleep Timer").clicked() {
-                    let result = actions::apply_sleep(self.sleep.current());
+                if ui.button("Apply Settings").clicked() {
+                    let result = actions::apply_settings(
+                        self.settings.sleep(),
+                        self.settings.key_response(),
+                    );
                     self.set_status(result);
                 }
 

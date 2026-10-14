@@ -2,7 +2,74 @@
 /// Based on reverse-engineering from TaxMachine/ajazz-keyboard-software-linux.
 
 pub const VENDOR_ID: u16 = 0x0C45;
-pub const PRODUCT_ID: u16 = 0x8009;
+
+/// Layout of the settings block sent after the CMD_SETTINGS preamble.
+/// Firmware revisions disagree on where each setting lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsLayout {
+    /// Original reverse-engineering: sleep time at byte 8, no key response time.
+    Legacy,
+    /// Captured from the official Windows app (v1.0.0.5) on PID 800A:
+    /// sleep time at byte 6, key response time (debounce) at byte 8.
+    V1_1,
+}
+
+/// A supported keyboard revision.
+#[derive(Debug)]
+pub struct Model {
+    pub pid: u16,
+    pub name: &'static str,
+    pub settings: SettingsLayout,
+}
+
+impl Model {
+    pub fn supports_key_response(&self) -> bool {
+        self.settings == SettingsLayout::V1_1
+    }
+}
+
+/// All known AK820 Pro revisions. Add new PIDs here only.
+pub const SUPPORTED_MODELS: &[Model] = &[
+    Model { pid: 0x8009, name: "AK820 Pro", settings: SettingsLayout::Legacy },
+    Model { pid: 0x800A, name: "AK820 Pro (v1.1)", settings: SettingsLayout::V1_1 },
+];
+
+/// Model used for a PID forced via AK820_PID that isn't in SUPPORTED_MODELS.
+static OVERRIDE_MODEL: std::sync::OnceLock<Option<Model>> = std::sync::OnceLock::new();
+
+/// PID forced via the AK820_PID environment variable (hex, e.g. "800b" or "0x800b").
+fn override_pid() -> Option<u16> {
+    let v = std::env::var("AK820_PID").ok()?;
+    u16::from_str_radix(v.trim().trim_start_matches("0x").trim_start_matches("0X"), 16).ok()
+}
+
+/// Look up the model for a USB VID/PID, honouring the AK820_PID override.
+/// Unlisted override PIDs are assumed to use the newest settings layout.
+pub fn find_model(vid: u16, pid: u16) -> Option<&'static Model> {
+    if vid != VENDOR_ID {
+        return None;
+    }
+    if let Some(model) = SUPPORTED_MODELS.iter().find(|m| m.pid == pid) {
+        return Some(model);
+    }
+    OVERRIDE_MODEL
+        .get_or_init(|| override_pid().map(|pid| Model {
+            pid,
+            name: "AK820 Pro (AK820_PID override)",
+            settings: SettingsLayout::V1_1,
+        }))
+        .as_ref()
+        .filter(|m| m.pid == pid)
+}
+
+/// Human-readable list of supported PIDs, e.g. "8009|800a".
+pub fn supported_pids() -> String {
+    let mut pids: Vec<String> = SUPPORTED_MODELS.iter().map(|m| format!("{:04x}", m.pid)).collect();
+    if let Some(pid) = override_pid().filter(|p| SUPPORTED_MODELS.iter().all(|m| m.pid != *p)) {
+        pids.push(format!("{:04x}", pid));
+    }
+    pids.join("|")
+}
 
 pub const PACKET_LENGTH: usize = 64;
 pub const REPORT_ID: u8 = 0x04;
@@ -19,7 +86,7 @@ pub const LCD_DATA_SIZE: usize = LCD_PIXELS * 2; // RGB565 = 2 bytes per pixel
 pub const CMD_START: u8 = 0x18;
 pub const CMD_FINISH: u8 = 0xF0;
 pub const CMD_MODE: u8 = 0x13;
-pub const CMD_SLEEP: u8 = 0x17;
+pub const CMD_SETTINGS: u8 = 0x17; // sleep time + key response time block
 pub const CMD_IMAGE: u8 = 0x72;
 pub const CMD_TIME: u8 = 0x28;
 pub const CMD_SAVE: u8 = 0x02;
@@ -50,8 +117,8 @@ pub fn mode_preamble_packet() -> [u8; PACKET_LENGTH] {
     control_packet(CMD_MODE, 0x00, 0x01)
 }
 
-pub fn sleep_preamble_packet() -> [u8; PACKET_LENGTH] {
-    control_packet(CMD_SLEEP, 0x01, 0x01)
+pub fn settings_preamble_packet() -> [u8; PACKET_LENGTH] {
+    control_packet(CMD_SETTINGS, 0x01, 0x01)
 }
 
 pub fn image_preamble_packet() -> [u8; PACKET_LENGTH] {
@@ -161,7 +228,7 @@ impl Direction {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SleepTime {
     Never = 0,
@@ -179,6 +246,39 @@ impl SleepTime {
             "30" | "30m" | "30min" => Some(Self::ThirtyMinutes),
             _ => None,
         }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::OneMinute => "1m",
+            Self::FiveMinutes => "5m",
+            Self::ThirtyMinutes => "30m",
+        }
+    }
+}
+
+/// Key response time (hardware debounce) level, 1-5.
+/// Approximate wired delays from the official app: 1 = 2-3 ms, 2 = 5-6 ms,
+/// 3 = 8-9 ms, 4 = 13-14 ms, 5 = 17-18 ms. Too low may cause key chatter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyResponse(u8);
+
+impl KeyResponse {
+    pub const MIN: u8 = 1;
+    pub const MAX: u8 = 5;
+
+    pub fn new(level: u8) -> Option<Self> {
+        (Self::MIN..=Self::MAX).contains(&level).then_some(Self(level))
+    }
+
+    pub fn level(&self) -> u8 {
+        self.0
+    }
+
+    /// Approximate wired debounce delay, as documented by the official app.
+    pub fn wired_delay(&self) -> &'static str {
+        ["2-3 ms", "5-6 ms", "8-9 ms", "13-14 ms", "17-18 ms"][(self.0 - 1) as usize]
     }
 }
 
@@ -269,11 +369,80 @@ pub fn time_data_packet(
     pkt
 }
 
-/// Build the 64-byte sleep data packet.
-pub fn sleep_data_packet(sleep_time: SleepTime) -> [u8; PACKET_LENGTH] {
+/// Build the 64-byte settings data packet sent after the CMD_SETTINGS preamble.
+/// The block holds every setting at once — the keyboard can't report its
+/// current values, so callers must always send the complete set.
+/// `key_response` is required on V1_1 and ignored on Legacy.
+pub fn settings_data_packet(
+    layout: SettingsLayout,
+    sleep_time: SleepTime,
+    key_response: Option<KeyResponse>,
+) -> [u8; PACKET_LENGTH] {
     let mut pkt = [0u8; PACKET_LENGTH];
-    pkt[8] = sleep_time as u8;
+    match layout {
+        SettingsLayout::Legacy => {
+            pkt[8] = sleep_time as u8;
+        }
+        SettingsLayout::V1_1 => {
+            // Bytes 1 and 5 are always 0x01 in captures from the official app;
+            // their meaning is unknown.
+            pkt[1] = 0x01;
+            pkt[5] = 0x01;
+            pkt[6] = sleep_time as u8;
+            debug_assert!(key_response.is_some(), "V1_1 settings need a key response time");
+            pkt[8] = key_response.map_or(0, |k| k.level());
+        }
+    }
     pkt[PACKET_LENGTH - 2] = DELIMITER_HI; // 0xAA at byte 62
     pkt[PACKET_LENGTH - 1] = DELIMITER_LO; // 0x55 at byte 63
     pkt
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hex(pkt: &[u8]) -> String {
+        pkt.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    fn captured(prefix: &str) -> String {
+        // Captured packets are zero-filled up to the AA55 delimiter at 62-63.
+        format!("{:0<124}aa55", prefix)
+    }
+
+    #[test]
+    fn v1_1_settings_match_official_app_capture() {
+        let lvl = |n| KeyResponse::new(n);
+        // Key response levels 1-5, sleep 5m (from the debounce capture)
+        for n in 1..=5 {
+            let pkt = settings_data_packet(SettingsLayout::V1_1, SleepTime::FiveMinutes, lvl(n));
+            assert_eq!(hex(&pkt), captured(&format!("00010000000102000{}", n)));
+        }
+        // Sleep never/1m/5m/30m, key response level 5 (from the sleep capture)
+        let sleeps = [SleepTime::Never, SleepTime::OneMinute, SleepTime::FiveMinutes, SleepTime::ThirtyMinutes];
+        for (i, s) in sleeps.into_iter().enumerate() {
+            let pkt = settings_data_packet(SettingsLayout::V1_1, s, lvl(5));
+            assert_eq!(hex(&pkt), captured(&format!("0001000000010{}0005", i)));
+        }
+    }
+
+    #[test]
+    fn settings_preamble_matches_capture() {
+        assert_eq!(hex(&settings_preamble_packet()), format!("{:0<128}", "041701000000000001"));
+    }
+
+    #[test]
+    fn key_response_range() {
+        assert!(KeyResponse::new(0).is_none());
+        assert!(KeyResponse::new(6).is_none());
+        assert_eq!(KeyResponse::new(3).unwrap().wired_delay(), "8-9 ms");
+    }
+
+    #[test]
+    fn model_lookup() {
+        assert_eq!(find_model(VENDOR_ID, 0x800A).unwrap().settings, SettingsLayout::V1_1);
+        assert!(find_model(VENDOR_ID, 0x8009).unwrap().settings == SettingsLayout::Legacy);
+        assert!(find_model(0x1234, 0x800A).is_none());
+    }
 }

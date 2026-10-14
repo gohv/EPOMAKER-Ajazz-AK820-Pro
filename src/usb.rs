@@ -3,7 +3,7 @@
 /// The kernel's hid-generic driver interferes with feature reports, so we must
 /// bypass it via libusb.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use rusb::{DeviceHandle, GlobalContext};
 use std::time::Duration;
 
@@ -28,6 +28,7 @@ pub struct UsbDevice {
     handle: DeviceHandle<GlobalContext>,
     iface: u8,
     data_iface_claimed: bool,
+    model: &'static Model,
 }
 
 impl UsbDevice {
@@ -37,16 +38,15 @@ impl UsbDevice {
             .and_then(|v| v.parse::<u8>().ok())
             .unwrap_or(CONTROL_INTERFACE);
 
-        let device = rusb::devices()?
+        let (device, model) = rusb::devices()?
             .iter()
-            .find(|d| {
-                d.device_descriptor()
-                    .map(|desc| desc.vendor_id() == VENDOR_ID && desc.product_id() == PRODUCT_ID)
-                    .unwrap_or(false)
+            .find_map(|d| {
+                let desc = d.device_descriptor().ok()?;
+                find_model(desc.vendor_id(), desc.product_id()).map(|m| (d, m))
             })
             .ok_or_else(|| anyhow::anyhow!(
-                "AK820 Pro not found (VID {:04x}, PID {:04x}). Is it connected via USB?",
-                VENDOR_ID, PRODUCT_ID
+                "AK820 Pro not found (VID {:04x}, PID {}). Is it connected via USB cable?",
+                VENDOR_ID, supported_pids()
             ))?;
 
         let handle = device.open().context("Failed to open USB device")?;
@@ -61,8 +61,12 @@ impl UsbDevice {
         handle.claim_interface(iface)
             .context(format!("Failed to claim interface {}", iface))?;
 
-        eprintln!("Connected to AK820 Pro (interface {})", iface);
-        Ok(Self { handle, iface, data_iface_claimed: false })
+        eprintln!("Connected to {} [{:04x}] (interface {})", model.name, model.pid, iface);
+        Ok(Self { handle, iface, data_iface_claimed: false, model })
+    }
+
+    pub fn model(&self) -> &'static Model {
+        self.model
     }
 
     /// Claim interface 2 for sustained image transfers (LCD loop).
@@ -244,12 +248,21 @@ impl UsbDevice {
         Ok(())
     }
 
-    pub fn set_sleep_time(&self, sleep_time: SleepTime) -> Result<()> {
-        let preamble = sleep_preamble_packet();
-        let data = sleep_data_packet(sleep_time);
+    /// Write the settings block (sleep timer + key response time).
+    /// Both values are always sent together; `key_response` is required on
+    /// models that support it and must be None on models that don't.
+    /// Protocol (from the official app): START → SETTINGS → DATA → SAVE
+    pub fn set_settings(&self, sleep_time: SleepTime, key_response: Option<KeyResponse>) -> Result<()> {
+        match (self.model.supports_key_response(), key_response) {
+            (true, None) => bail!("{} needs a key response time with every settings write", self.model.name),
+            (false, Some(_)) => bail!("Key response time isn't supported on {} [{:04x}]", self.model.name, self.model.pid),
+            _ => {}
+        }
+        let data = settings_data_packet(self.model.settings, sleep_time, key_response);
         self.send_feature(&start_packet())?;
-        self.send_feature(&preamble)?;
+        self.send_feature(&settings_preamble_packet())?;
         self.send_feature(&data)?;
+        self.send_feature(&save_packet())?;
         std::thread::sleep(Duration::from_millis(100));
         Ok(())
     }

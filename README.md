@@ -7,12 +7,15 @@ Full name on Amazon.fr
 
 Linux control software for the Ajazz AK820 Pro keyboard. Includes a CLI tool and a GUI app.
 
-The official software only supports Windows. This project talks to the keyboard over USB HID to control lighting, sleep timer, and the built-in clock.
+The official software only supports Windows. This project talks to the keyboard over USB HID to control lighting, sleep timer, key response time (debounce), and the built-in clock.
+
+Supported revisions (USB VID `0c45`): PID `8009` and PID `800a` (v1.1). Key response time is only supported on `800a`.
 
 ## Features
 
 - 20 lighting modes with RGB color, rainbow, brightness, speed, and direction controls
 - Sleep timer (never, 1 min, 5 min, 30 min)
+- Key response time / hardware debounce (levels 1-5, PID `800a`)
 - Clock sync (pushes system time to the keyboard's internal clock)
 - GUI control panel (egui)
 
@@ -66,7 +69,7 @@ If you skip this step, you can still run everything with `sudo`.
 ./target/release/ak820-gui
 ```
 
-Or double-click the desktop shortcut if you set one up. The GUI has sections for lighting, sleep timer, and clock sync. Everything is point and click.
+Or double-click the desktop shortcut if you set one up. The GUI has sections for lighting, keyboard settings (sleep timer and key response time), and clock sync. Everything is point and click.
 
 ### CLI
 
@@ -103,6 +106,33 @@ ak820-ctl sleep 5m
 ak820-ctl sleep 30m
 ```
 
+**Set key response time (hardware debounce):**
+
+```
+ak820-ctl key-response 3      # alias: ak820-ctl debounce 3
+```
+
+Levels from the official app (wired): 1 = 2-3 ms, 2 = 5-6 ms, 3 = 8-9 ms, 4 = 13-14 ms, 5 = 17-18 ms. If keys chatter (register twice), raise the level.
+
+**Sleep timer and key response time together:**
+
+The keyboard stores both in one settings block, so every write sends both, and it can't report the current values. `ak820-ctl` remembers the last applied values in `~/.config/ak820/settings` and reuses them when you change only one. The first time, set both:
+
+```
+ak820-ctl settings --sleep 5m --key-response 3
+ak820-ctl settings             # show the last applied values
+```
+
+**Unlisted keyboard revision:**
+
+If your AK820 Pro reports a different PID (check `lsusb`), you can try it without recompiling. Unknown PIDs use the newest (`800a`) protocol:
+
+```
+AK820_PID=800b ak820-ctl probe
+```
+
+If it works, add it to `SUPPORTED_MODELS` in `src/protocol.rs` and to `99-ak820.rules`.
+
 **Sync the keyboard clock:**
 
 ```
@@ -119,7 +149,7 @@ ak820-ctl probe
 
 ## How it works
 
-The keyboard uses a Sonix SN32F299 MCU with 4 USB HID interfaces. Interface 3 handles control commands (lighting, sleep, clock) via HID feature reports. The protocol was reverse-engineered using Wireshark USB captures and the [TaxMachine C++ reference](https://github.com/TaxMachine/ajazz-keyboard-software-linux). Clock sync protocol is from [KyleBoyer/TFTTimeSync-node](https://github.com/KyleBoyer/TFTTimeSync-node).
+The keyboard uses a Sonix SN32F299 MCU with 4 USB HID interfaces. Interface 3 handles control commands (lighting, sleep, key response time, clock) via HID feature reports. The settings block (command `0x17`) layout for PID `800a` was captured from the official Windows app (v1.0.0.5) by hooking `HidD_SetFeature` with Frida. The protocol was reverse-engineered using Wireshark USB captures and the [TaxMachine C++ reference](https://github.com/TaxMachine/ajazz-keyboard-software-linux). Clock sync protocol is from [KyleBoyer/TFTTimeSync-node](https://github.com/KyleBoyer/TFTTimeSync-node).
 
 ## License
 

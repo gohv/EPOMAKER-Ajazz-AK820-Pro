@@ -31,6 +31,7 @@ fn hidiocgfeature(len: usize) -> libc::c_ulong {
 pub struct HidrawDevice {
     file: File,
     path: PathBuf,
+    model: &'static Model,
 }
 
 impl HidrawDevice {
@@ -47,14 +48,19 @@ impl HidrawDevice {
             let uevent_path = entry.path().join("device/uevent");
 
             if let Ok(uevent) = std::fs::read_to_string(&uevent_path) {
-                let has_vid_pid = uevent.contains(&format!(
-                    "HID_ID=0003:{:08X}:{:08X}",
-                    VENDOR_ID as u32, PRODUCT_ID as u32
-                ));
-
-                if !has_vid_pid {
+                // HID_ID=0003:0000VVVV:0000PPPP (bus:vendor:product, hex)
+                let model = uevent
+                    .lines()
+                    .find_map(|l| l.strip_prefix("HID_ID=0003:"))
+                    .and_then(|ids| ids.split_once(':'))
+                    .and_then(|(v, p)| Some((
+                        u16::from_str_radix(v.get(4..)?, 16).ok()?,
+                        u16::from_str_radix(p.get(4..)?, 16).ok()?,
+                    )))
+                    .and_then(|(vid, pid)| find_model(vid, pid));
+                let Some(model) = model else {
                     continue;
-                }
+                };
 
                 let phys_iface = uevent
                     .lines()
@@ -78,14 +84,18 @@ impl HidrawDevice {
                         dev_path.display()
                     ))?;
 
-                return Ok(Self { file, path: dev_path });
+                return Ok(Self { file, path: dev_path, model });
             }
         }
 
         bail!(
-            "AK820 Pro interface {} not found. Is the keyboard connected via USB?",
+            "AK820 Pro interface {} not found. Is the keyboard connected via USB cable?",
             iface
         );
+    }
+
+    pub fn model(&self) -> &'static Model {
+        self.model
     }
 
     /// Send a SET_REPORT (Feature) via ioctl.
@@ -170,12 +180,18 @@ impl HidrawDevice {
             .context("Failed to set lighting mode")
     }
 
-    pub fn set_sleep_time(&self, sleep_time: SleepTime) -> Result<()> {
-        let preamble = sleep_preamble_packet();
-        let data = sleep_data_packet(sleep_time);
+    /// Write the settings block (sleep timer + key response time).
+    /// `key_response` is required on models that support it, None otherwise.
+    pub fn set_settings(&self, sleep_time: SleepTime, key_response: Option<KeyResponse>) -> Result<()> {
+        if self.model.supports_key_response() != key_response.is_some() {
+            bail!("Key response time is {} on {}",
+                if key_response.is_some() { "not supported" } else { "required" }, self.model.name);
+        }
+        let data = settings_data_packet(self.model.settings, sleep_time, key_response);
         self.send(&start_packet())?;
-        self.send(&preamble)?;
+        self.send(&settings_preamble_packet())?;
         self.send(&data)?;
+        self.send(&save_packet())?;
         Ok(())
     }
 }

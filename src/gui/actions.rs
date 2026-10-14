@@ -1,4 +1,5 @@
-use ak820_ctl::protocol::{Direction, LightingMode, SleepTime};
+use ak820_ctl::protocol::{Direction, KeyResponse, LightingMode, SleepTime};
+use ak820_ctl::settings_store::StoredSettings;
 use ak820_ctl::usb::UsbDevice;
 
 pub fn apply_lighting(
@@ -18,10 +19,27 @@ pub fn apply_lighting(
     ))
 }
 
-pub fn apply_sleep(sleep_time: SleepTime) -> Result<String, String> {
+/// Write sleep timer + key response time and remember them.
+/// Key response time is skipped on models that don't support it.
+pub fn apply_settings(sleep_time: SleepTime, key_response: KeyResponse) -> Result<String, String> {
     let dev = UsbDevice::open().map_err(|e| format_usb_error(e))?;
-    dev.set_sleep_time(sleep_time).map_err(|e| format!("{:#}", e))?;
-    Ok(format!("Sleep timer: {:?}", sleep_time))
+    let key_response = dev.model().supports_key_response().then_some(key_response);
+    dev.set_settings(sleep_time, key_response).map_err(|e| format!("{:#}", e))?;
+
+    let mut stored = StoredSettings::load();
+    stored.sleep = Some(sleep_time);
+    stored.key_response = key_response.or(stored.key_response);
+    let saved = stored.save();
+
+    let mut msg = format!("Sleep timer: {}", sleep_time.name());
+    match key_response {
+        Some(k) => msg.push_str(&format!(" | key response: level {} (~{})", k.level(), k.wired_delay())),
+        None => msg.push_str(" | key response time not supported on this model"),
+    }
+    if let Err(e) = saved {
+        msg.push_str(&format!(" (couldn't remember settings: {:#})", e));
+    }
+    Ok(msg)
 }
 
 pub fn sync_time() -> Result<String, String> {
@@ -39,8 +57,8 @@ pub fn sync_time() -> Result<String, String> {
 }
 
 pub fn probe_device() -> Result<String, String> {
-    let _dev = UsbDevice::open().map_err(|e| format_usb_error(e))?;
-    Ok("AK820 Pro connected".to_string())
+    let dev = UsbDevice::open().map_err(|e| format_usb_error(e))?;
+    Ok(format!("{} [{:04x}] connected", dev.model().name, dev.model().pid))
 }
 
 fn format_usb_error(e: anyhow::Error) -> String {
