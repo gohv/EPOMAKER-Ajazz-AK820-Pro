@@ -46,8 +46,7 @@ Binaries go to `target/release/`.
 
 ### Static, self-contained binaries (optional)
 
-For binaries with **no shared-library dependencies** (no `libusb`, no `hidapi`,
-no `glibc`) that run on any x86-64 Linux machine:
+For a **fully static CLI** plus a GUI that needs no `libusb`/`libudev` install:
 
 ```
 sudo dnf install musl-gcc kernel-headers
@@ -55,13 +54,22 @@ rustup target add x86_64-unknown-linux-musl
 ./build-static.sh
 ```
 
-Produces both `ak820-ctl` and `ak820-gui` under
-`target/x86_64-unknown-linux-musl/release/`, statically linked. The `rusb`
-dependency uses the `vendored` feature so libusb is compiled from source;
-`build-static.sh` handles the kernel-header and linking setup.
+It produces:
 
-The GUI needs a display server (X11 or Wayland) at runtime — it loads the
-graphics libraries via `dlopen`, so a normal desktop is all it requires.
+- `target/x86_64-unknown-linux-musl/release/ak820-ctl` — the CLI, **fully static**,
+  no shared-library dependencies at all. Copy it to any x86-64 Linux box.
+- `target/release/ak820-gui` — the GUI on your host libc, with libusb compiled in
+  (its `ldd` shows only libc/libm/libgcc, never `libusb` or `libudev`).
+
+The GUI is *not* static, and cannot be: eframe loads libwayland-client.so, libGL,
+libX11 and libxkbcommon with `dlopen`, and a fully static binary has no dynamic
+loader (musl's static libc binds `dlopen` to a `stub_dlopen` that always fails).
+A static-musl GUI dies on every desktop, Wayland or X11, with:
+```
+Error: WinitEventLoop(Os(OsError { ... error: WaylandError(Connection(NoWaylandLib)) }))
+```
+The GUI still needs no `libusb`/`libudev` install: only the display libraries
+your desktop already has.
 
 ## USB permissions
 
