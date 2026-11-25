@@ -12,20 +12,22 @@ use crate::protocol::*;
 // Linux HID ioctl constants
 // HIDIOCSFEATURE = _IOC(_IOC_WRITE|_IOC_READ, 'H', 0x06, len)
 // HIDIOCGFEATURE = _IOC(_IOC_WRITE|_IOC_READ, 'H', 0x07, len)
-fn hidiocsfeature(len: usize) -> libc::c_ulong {
+fn hidiocsfeature(len: usize) -> libc::Ioctl {
     let dir: libc::c_ulong = 3;
     let typ: libc::c_ulong = b'H' as libc::c_ulong;
     let nr: libc::c_ulong = 0x06;
     let size: libc::c_ulong = len as libc::c_ulong;
-    (dir << 30) | (size << 16) | (typ << 8) | nr
+    // Compute in c_ulong (64-bit) then cast: Ioctl is c_ulong on gnu but
+    // c_int on musl, and the dir bit (3 << 30) overflows a 32-bit type.
+    ((dir << 30) | (size << 16) | (typ << 8) | nr) as libc::Ioctl
 }
 
-fn hidiocgfeature(len: usize) -> libc::c_ulong {
+fn hidiocgfeature(len: usize) -> libc::Ioctl {
     let dir: libc::c_ulong = 3;
     let typ: libc::c_ulong = b'H' as libc::c_ulong;
     let nr: libc::c_ulong = 0x07;
     let size: libc::c_ulong = len as libc::c_ulong;
-    (dir << 30) | (size << 16) | (typ << 8) | nr
+    ((dir << 30) | (size << 16) | (typ << 8) | nr) as libc::Ioctl
 }
 
 pub struct HidrawDevice {

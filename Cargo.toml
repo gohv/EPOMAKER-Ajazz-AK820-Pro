@@ -19,7 +19,9 @@ gui = ["eframe"]
 
 [dependencies]
 hidapi = { version = "2.6", default-features = false, features = ["linux-static-libusb"] }
-rusb = "0.9"
+# `vendored` makes libusb1-sys compile libusb from source (static), so a
+# static musl build needs no system libusb. See build-static.sh.
+rusb = { version = "0.9", features = ["vendored"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 libc = "0.2"

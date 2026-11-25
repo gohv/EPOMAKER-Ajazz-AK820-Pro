@@ -44,6 +44,25 @@ cargo build --release --features gui
 
 Binaries go to `target/release/`.
 
+### Static, self-contained binaries (optional)
+
+For binaries with **no shared-library dependencies** (no `libusb`, no `hidapi`,
+no `glibc`) that run on any x86-64 Linux machine:
+
+```
+sudo dnf install musl-gcc kernel-headers
+rustup target add x86_64-unknown-linux-musl
+./build-static.sh
+```
+
+Produces both `ak820-ctl` and `ak820-gui` under
+`target/x86_64-unknown-linux-musl/release/`, statically linked. The `rusb`
+dependency uses the `vendored` feature so libusb is compiled from source;
+`build-static.sh` handles the kernel-header and linking setup.
+
+The GUI needs a display server (X11 or Wayland) at runtime — it loads the
+graphics libraries via `dlopen`, so a normal desktop is all it requires.
+
 ## USB permissions
 
 By default the USB device requires root access. To use it as a normal user, install the udev rule:
