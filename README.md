@@ -61,6 +61,14 @@ It produces:
 - `target/release/ak820-gui` — the GUI on your host libc, with libusb compiled in
   (its `ldd` shows only libc/libm/libgcc, never `libusb` or `libudev`).
 
+Two targets means two output trees: cargo keeps one directory per target triple,
+and the CLI must build for musl while the GUI must build for your host libc. The
+script copies both into one folder at the end, so you only ever need to remember:
+
+```
+dist/ak820-ctl    dist/ak820-gui
+```
+
 The GUI is *not* static, and cannot be: eframe loads libwayland-client.so, libGL,
 libX11 and libxkbcommon with `dlopen`, and a fully static binary has no dynamic
 loader (musl's static libc binds `dlopen` to a `stub_dlopen` that always fails).
@@ -90,7 +98,7 @@ If you skip this step, you can still run everything with `sudo`.
 ### GUI
 
 ```
-./target/release/ak820-gui
+./dist/ak820-gui
 ```
 
 Or double-click the desktop shortcut if you set one up. The GUI has sections for lighting, sleep timer, and clock sync. Everything is point and click.

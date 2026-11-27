@@ -5,6 +5,13 @@
 #   target/x86_64-unknown-linux-musl/release/ak820-ctl — CLI, no shared libs at all
 #   target/release/ak820-gui                           — GUI (eframe/egui), host libc
 #
+# And copies both of them to one place, which is the path you should use:
+#   dist/ak820-ctl    dist/ak820-gui
+# The two target/ trees are cargo's own layout, one directory per target triple
+# (`--target X` always nests under target/X, and --target-dir only moves the
+# parent). They cannot be merged: the CLI is built for musl and the GUI for the
+# host, so keeping them in one tree would mean throwing away static linking.
+#
 # Neither binary needs libusb or libudev at link or runtime: `rusb`'s `vendored`
 # feature compiles libusb from source into .o files, and we archive them into the
 # libusb-1.0.a that hidapi's build script asks the linker for. The CLI has no
@@ -67,8 +74,12 @@ build "x86_64-unknown-linux-musl" --target "$MUSL_TARGET" --bin ak820-ctl
 # --- GUI: host target (dynamic loader), libusb still baked in. ---
 build "release" --bin ak820-gui --features gui
 
+# One folder for both, so users only ever need to remember ./dist/.
+mkdir -p dist
+cp "target/$MUSL_TARGET/release/ak820-ctl" target/release/ak820-gui dist/
+
 echo
-for BIN in "target/$MUSL_TARGET/release/ak820-ctl" target/release/ak820-gui; do
+for BIN in dist/ak820-ctl dist/ak820-gui; do
   echo "Binary: $BIN"
   file "$BIN"
   ldd "$BIN" || true
